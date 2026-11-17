@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Jangle Local Cinema APK
 
 on:
   push:
@@ -19,17 +19,433 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Установка и запуск Gradle
+    - name: Установка Gradle
       uses: gradle/actions/setup-gradle@v4
       with:
         gradle-version: '8.4'
 
-    - name: Сборка Debug APK
-      working-directory: Jangle_Local_Cinema_3.0.2
-      run: gradle assembleDebug
+    - name: Автогенерация Android-проекта с поддержкой SAF
+      run: |
+        mkdir -p android_build/app/src/main/java/com/directbone/jangle
+        mkdir -p android_build/app/src/main/res/values
+        mkdir -p android_build/app/src/main/assets/www
 
-    - name: Сохранение готового APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: app-debug-apk
-        path: app/build/outputs/apk/debug/*.apk
+        # Копируем ваши веб-файлы из Jangle_Local_Cinema_3.0.2
+        cp -r Jangle_Local_Cinema_3.0.2/* android_build/app/src/main/assets/www/
+
+        # 1. gradle.properties
+        cat << 'EOF' > android_build/gradle.properties
+        org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+        android.useAndroidX=true
+        kotlin.code.style=official
+        EOF
+
+        # 2. settings.gradle.kts
+        cat << 'EOF' > android_build/settings.gradle.kts
+        pluginManagement {
+            repositories {
+                google()
+                mavenCentral()
+                gradlePluginPortal()
+            }
+        }
+        dependencyResolutionManagement {
+            repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+            repositories {
+                google()
+                mavenCentral()
+            }
+        }
+        rootProject.name = "JangleLocalCinema"
+        include(":app")
+        EOF
+
+        # 3. Корневой build.gradle.kts
+        cat << 'EOF' > android_build/build.gradle.kts
+        plugins {
+            id("com.android.application") version "8.2.2" apply false
+            id("org.jetbrains.kotlin.android") version "1.9.22" apply false
+        }
+        EOF
+
+        # 4. app/build.gradle.kts
+        cat << 'EOF' > android_build/app/build.gradle.kts
+        plugins {
+            id("com.android.application")
+            id("org.jetbrains.kotlin.android")
+        }
+        android {
+            namespace = "com.directbone.jangle"
+            compileSdk = 34
+            defaultConfig {
+                applicationId = "com.directbone.jangle"
+                minSdk = 24
+                targetSdk = 34
+                versionCode = 1
+                versionName = "3.0.2"
+            }
+            compileOptions {
+                sourceCompatibility = JavaVersion.VERSION_17
+                targetCompatibility = JavaVersion.VERSION_17
+            }
+            kotlinOptions {
+                jvmTarget = "17"
+            }
+        }
+        dependencies {
+            implementation("androidx.core:core-ktx:1.12.0")
+            implementation("androidx.appcompat:appcompat:1.6.1")
+            implementation("androidx.webkit:webkit:1.10.0")
+            implementation("androidx.documentfile:documentfile:1.0.1")
+        }
+        EOF
+
+        # 5. styles.xml
+        cat << 'EOF' > android_build/app/src/main/res/values/styles.xml
+        <resources>
+            <style name="Theme.Jangle" parent="Theme.AppCompat.NoActionBar">
+                <item name="android:windowBackground">#0A0A0C</item>
+                <item name="android:statusBarColor">#0A0A0C</item>
+                <item name="android:navigationBarColor">#0A0A0C</item>
+            </style>
+        </resources>
+        EOF
+
+        # 6. AndroidManifest.xml
+        cat << 'EOF' > android_build/app/src/main/AndroidManifest.xml
+        <?xml version="1.0" encoding="utf-8"?>
+        <manifest xmlns:android="http://android.com">
+            <uses-permission android:name="android.permission.INTERNET" />
+            <application
+                android:label="Jangle Local Cinema"
+                android:theme="@style/Theme.Jangle"
+                android:hardwareAccelerated="true"
+                android:usesCleartextTraffic="true">
+                <activity
+                    android:name=".MainActivity"
+                    android:exported="true"
+                    android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
+                    <intent-filter>
+                        <action android:name="android.intent.action.MAIN" />
+                        <category android:name="android.intent.category.LAUNCHER" />
+                    </intent-filter>
+                </activity>
+            </application>
+        </manifest>
+        EOF
+
+        # 7. AndroidLibraryBridge.kt (Нативный мост для чтения папок SAF и потокового видео)
+        cat << 'EOF' > android_build/app/src/main/java/com/directbone/jangle/AndroidLibraryBridge.kt
+        package com.directbone.jangle
+
+        import android.content.Context
+        import android.content.Intent
+        import android.net.Uri
+        import android.webkit.JavascriptInterface
+        import android.webkit.WebResourceRequest
+        import android.webkit.WebResourceResponse
+        import android.webkit.WebView
+        import androidx.documentfile.provider.DocumentFile
+        import org.json.JSONArray
+        import org.json.JSONObject
+        import java.io.ByteArrayInputStream
+        import java.io.InputStream
+        import java.net.URLDecoder
+        import java.net.URLEncoder
+        import java.util.concurrent.ConcurrentHashMap
+
+        class AndroidLibraryBridge(
+            private val context: Context,
+            private val webView: WebView,
+            private val onPickDirectoryRequest: () -> Unit
+        ) {
+            private val prefs = context.getSharedPreferences("jangle_saf_prefs", Context.MODE_PRIVATE)
+            private val fileCache = ConcurrentHashMap<String, Uri>()
+
+            @JavascriptInterface
+            fun isAndroid(): Boolean = true
+
+            @JavascriptInterface
+            fun pickDirectory() {
+                webView.post { onPickDirectoryRequest() }
+            }
+
+            @JavascriptInterface
+            fun hasSavedDirectory(): Boolean {
+                val uriStr = prefs.getString("root_tree_uri", null) ?: return false
+                return try {
+                    val doc = DocumentFile.fromTreeUri(context, Uri.parse(uriStr))
+                    doc != null && doc.exists() && doc.canRead()
+                } catch (e: Exception) {
+                    false
+                }
+            }
+
+            fun onDirectoryPicked(uri: Uri) {
+                try {
+                    val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    context.contentResolver.takePersistableUriPermission(uri, flags)
+                } catch (_: Exception) {}
+                prefs.edit().putString("root_tree_uri", uri.toString()).apply()
+                scanAndNotify()
+            }
+
+            @JavascriptInterface
+            fun scanLibrary() {
+                scanAndNotify()
+            }
+
+            private fun scanAndNotify() {
+                Thread {
+                    val uriStr = prefs.getString("root_tree_uri", null)
+                    if (uriStr == null) {
+                        sendEvent("jangle-android-error", """{"message":"Папка не выбрана"}""")
+                        return@Thread
+                    }
+                    try {
+                        fileCache.clear()
+                        val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(uriStr))
+                        if (rootDoc == null || !rootDoc.exists()) {
+                            sendEvent("jangle-android-error", """{"message":"Нет доступа к папке"}""")
+                            return@Thread
+                        }
+                        val treeJson = buildTreeJson(rootDoc, "")
+                        val payload = JSONObject().apply {
+                            put("rootName", rootDoc.name ?: "Library")
+                            put("tree", treeJson)
+                        }
+                        sendEvent("jangle-android-library", payload.toString())
+                    } catch (e: Exception) {
+                        val err = JSONObject().put("message", e.message ?: "Ошибка сканирования").toString()
+                        sendEvent("jangle-android-error", err)
+                    }
+                }.start()
+            }
+
+            private fun buildTreeJson(dir: DocumentFile, currentPath: String): JSONArray {
+                val array = JSONArray()
+                for (file in dir.listFiles()) {
+                    val name = file.name ?: continue
+                    val relPath = if (currentPath.isEmpty()) name else "$currentPath/$name"
+                    val item = JSONObject()
+                    item.put("name", name)
+                    item.put("path", relPath)
+                    if (file.isDirectory) {
+                        item.put("kind", "directory")
+                        item.put("children", buildTreeJson(file, relPath))
+                    } else {
+                        item.put("kind", "file")
+                        item.put("size", file.length())
+                        item.put("lastModified", file.lastModified())
+                        fileCache[relPath] = file.uri
+                        val encoded = URLEncoder.encode(relPath, "UTF-8").replace("+", "%20")
+                        item.put("url", "https://androidplatform.net")
+                    }
+                    array.put(item)
+                }
+                return array
+            }
+
+            @JavascriptInterface
+            fun readTextFile(relPath: String): String {
+                val uri = fileCache[relPath] ?: return ""
+                return try {
+                    context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                } catch (e: Exception) {
+                    ""
+                }
+            }
+
+            @JavascriptInterface
+            fun writeTextFile(relPath: String, content: String): Boolean {
+            val uriStr = prefs.getString("root_tree_uri", null) ?: return false
+            return try {
+            var targetUri = fileCache[relPath]
+            if (targetUri == null) {
+            val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(uriStr)) ?: return false
+            val parts = relPath.split("/")
+            var curr = rootDoc
+            for (i in 0 until parts.size - 1) {
+            curr = curr.findFile(parts[i]) ?: curr.createDirectory(parts[i]) ?: return false
+            }
+            val fileName = parts.last()
+            val existing = curr.findFile(fileName)
+            val docFile = existing ?: curr.createFile("text/plain", fileName) ?: return false
+            targetUri = docFile.uri
+            fileCache[relPath] = targetUri
+            }
+            context.contentResolver.openOutputStream(targetUri, "wt")?.use {
+            it.write(content.toByteArray(Charsets.UTF_8))
+            }
+            true
+            } catch (e: Exception) {
+            false
+            }
+            }
+            fun handleSafRequest(request: WebResourceRequest): WebResourceResponse? {
+            val url = request.url.toString()
+            val prefix = "androidplatform.net"
+            if (!url.startsWith(prefix)) return null
+            val encodedPath = url.removePrefix(prefix)
+            val relPath = URLDecoder.decode(encodedPath, "UTF-8")
+            val uri = fileCache[relPath] ?: return WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+            val mime = getMimeType(relPath)
+            val totalLength = getFileLength(uri)
+            val rangeHeader = request.requestHeaders["Range"] ?: request.requestHeaders["range"]
+            return try {
+            val inputStream = context.contentResolver.openInputStream(uri) ?: return null
+            if (rangeHeader != null && rangeHeader.startsWith("bytes=") && totalLength > 0) {
+            val rangeParts = rangeHeader.removePrefix("bytes=").split("-")
+            val start = rangeParts[0].toLongOrNull() ?: 0L
+            val end = if (rangeParts.size > 1 && rangeParts[1].isNotEmpty()) {
+            rangeParts[1].toLongOrNull() ?: (totalLength - 1)
+            } else {
+            totalLength - 1
+            }
+            val contentLength = (end - start + 1).coerceAtLeast(0L)
+            skipFully(inputStream, start)
+            val headers = mapOf(
+            "Content-Range" to "bytes $start-$end/$totalLength",
+            "Accept-Ranges" to "bytes",
+            "Content-Length" to contentLength.toString(),
+            "Access-Control-Allow-Origin" to ""
+            )
+            WebResourceResponse(mime, null, 206, "Partial Content", headers, inputStream)
+            } else {
+            val headers = mutableMapOf(
+            "Accept-Ranges" to "bytes",
+            "Access-Control-Allow-Origin" to ""
+            )
+            if (totalLength > 0) headers["Content-Length"] = totalLength.toString()
+            WebResourceResponse(mime, null, 200, "OK", headers, inputStream)
+            }
+            } catch (e: Exception) {
+            null
+            }
+            }
+            private fun getFileLength(uri: Uri): Long {
+            return try {
+            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: -1L
+            } catch (_: Exception) { -1L }
+            }
+            private fun skipFully(stream: InputStream, bytesToSkip: Long) {
+            var remaining = bytesToSkip
+            while (remaining > 0) {
+            val skipped = stream.skip(remaining)
+            if (skipped <= 0) {
+            if (stream.read() == -1) break
+            remaining--
+            } else {
+            remaining -= skipped
+            }
+            }
+            }
+            private fun getMimeType(path: String): String {
+            val lower = path.lowercase()
+            return when {
+            lower.endsWith(".mp4") || lower.endsWith(".m4v") -> "video/mp4"
+            lower.endsWith(".webm") -> "video/webm"
+            lower.endsWith(".mkv") -> "video/x-matroska"
+            lower.endsWith(".mov") -> "video/quicktime"
+            lower.endsWith(".avi") -> "video/x-msvideo"
+            lower.endsWith(".mp3") -> "audio/mpeg"
+            lower.endsWith(".m4a") -> "audio/mp4"
+            lower.endsWith(".ogg") -> "audio/ogg"
+            lower.endsWith(".wav") -> "audio/wav"
+            lower.endsWith(".png") -> "image/png"
+            lower.endsWith(".jpg") || lower.endsWith(".jpeg") -> "image/jpeg"
+            lower.endsWith(".webp") -> "image/webp"
+            lower.endsWith(".gif") -> "image/gif"
+            lower.endsWith(".svg") -> "image/svg+xml"
+            lower.endsWith(".vtt") -> "text/vtt"
+            lower.endsWith(".srt") -> "application/x-subrip"
+            lower.endsWith(".md") || lower.endsWith(".txt") -> "text/plain; charset=utf-8"
+            lower.endsWith(".json") -> "application/json; charset=utf-8"
+            else -> "application/octet-stream"
+            }
+            }
+            private fun sendEvent(eventName: String, jsonDetail: String) {
+            val escaped = JSONObject.quote(jsonDetail)
+            webView.post {
+            webView.evaluateJavascript(
+            "window.dispatchEvent(new CustomEvent('$eventName', { detail: JSON.parse($escaped) }));",
+            null
+            )
+            }
+            }
+            }
+            EOF
+            # 8. MainActivity.kt
+            cat << 'EOF' > android_build/app/src/main/java/com/directbone/jangle/MainActivity.kt
+            package com.directbone.jangle
+            import android.annotation.SuppressLint
+            import android.net.Uri
+            import android.os.Bundle
+            import android.webkit.WebResourceRequest
+            import android.webkit.WebResourceResponse
+            import android.webkit.WebView
+            import androidx.activity.OnBackPressedCallback
+            import androidx.activity.result.contract.ActivityResultContracts
+            import androidx.appcompat.app.AppCompatActivity
+            import androidx.webkit.WebViewAssetLoader
+            import androidx.webkit.WebViewClientCompat
+            class MainActivity : AppCompatActivity() {
+            private lateinit var webView: WebView
+            private lateinit var bridge: AndroidLibraryBridge
+            private val openDirectoryLauncher = registerForActivityResult(
+            ActivityResultContracts.OpenDocumentTree()
+            ) { uri: Uri? ->
+            if (uri != null) {
+            bridge.onDirectoryPicked(uri)
+            }
+            }
+            @SuppressLint("SetJavaScriptEnabled")
+            override fun onCreate(savedInstanceState: Bundle?) {
+            super.onCreate(savedInstanceState)
+            webView = WebView(this)
+            setContentView(webView)
+            val assetLoader = WebViewAssetLoader.Builder()
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+            bridge = AndroidLibraryBridge(this, webView) {
+            openDirectoryLauncher.launch(null)
+            }
+            webView.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            mediaPlaybackRequiresUserGesture = false
+            allowFileAccess = true
+            allowContentAccess = true
+            }
+            webView.addJavascriptInterface(bridge, "AndroidJangle")
+            webView.webViewClient = object : WebViewClientCompat() {
+            override fun shouldInterceptRequest(
+            view: WebView,
+            request: WebResourceRequest
+            ): WebResourceResponse? {
+            bridge.handleSafRequest(request)?.let { return it }
+            return assetLoader.shouldInterceptRequest(request.url)
+            }
+            }
+            onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+            if (webView.canGoBack()) {
+            webView.goBack()
+            } else {
+            isEnabled = false
+            onBackPressedDispatcher.onBackPressed()
+            }
+            }
+            })
+            webView.loadUrl("androidplatform.net")
+            }
+            }
+            EOF
+            - name: Сборка Debug APK
+            working-directory: android_build
+            run: gradle assembleDebug
+            - name: Сохранение готового APK
+            uses: actions/upload-artifact@v4
+            with:
+            name: Jangle_Local_Cinema_3.0.2_APK
+            path: android_build/app/build/outputs/apk/debug/*.apk
