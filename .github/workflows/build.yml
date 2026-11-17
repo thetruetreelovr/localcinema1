@@ -25,6 +25,7 @@ jobs:
         gradle-version: '8.4'
 
     - name: Сборка Debug APK
+      working-directory: Jangle_Local_Cinema_3.0.2
       run: gradle assembleDebug
 
     - name: Сохранение готового APK
