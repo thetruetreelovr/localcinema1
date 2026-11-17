@@ -2,6 +2,7 @@ package com.directbone.jangle
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.graphics.Color
 import android.os.Bundle
 import android.view.View
@@ -13,11 +14,9 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.ValueCallback
 import android.widget.FrameLayout
 import androidx.webkit.WebViewAssetLoader
-import java.io.ByteArrayInputStream
-import java.io.FileNotFoundException
-import java.io.InputStream
 
 class MainActivity : Activity() {
     private lateinit var webView: WebView
@@ -25,6 +24,7 @@ class MainActivity : Activity() {
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private lateinit var chromeClient: WebChromeClient
+    private var pendingFileChooser: ValueCallback<Array<Uri>>? = null
 
     private val bridge by lazy { AndroidLibraryBridge(this) }
 
@@ -69,6 +69,23 @@ class MainActivity : Activity() {
                 }
             }
             chromeClient = object : WebChromeClient() {
+                override fun onShowFileChooser(
+                    webView: WebView,
+                    filePathCallback: ValueCallback<Array<Uri>>,
+                    fileChooserParams: WebChromeClient.FileChooserParams
+                ): Boolean {
+                    pendingFileChooser?.onReceiveValue(null)
+                    pendingFileChooser = filePathCallback
+                    return try {
+                        this@MainActivity.startActivityForResult(fileChooserParams.createIntent(), REQUEST_FILES)
+                        true
+                    } catch (_: Exception) {
+                        pendingFileChooser = null
+                        filePathCallback.onReceiveValue(null)
+                        false
+                    }
+                }
+
                 override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                     if (customView != null) {
                         callback.onCustomViewHidden()
@@ -130,6 +147,12 @@ class MainActivity : Activity() {
     @Deprecated("Android SAF result callback")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_FILES) {
+            val callback = pendingFileChooser
+            pendingFileChooser = null
+            callback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
+            return
+        }
         if (requestCode != REQUEST_LIBRARY) return
         if (resultCode != RESULT_OK || data?.data == null) {
             notifyLibrarySelection(null)
@@ -177,6 +200,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        pendingFileChooser?.onReceiveValue(null)
+        pendingFileChooser = null
         if (::webView.isInitialized) {
             webView.removeJavascriptInterface("JangleAndroidBridge")
             webView.stopLoading()
@@ -188,6 +213,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQUEST_LIBRARY = 7214
+        private const val REQUEST_FILES = 7215
         private const val APP_URL = "https://appassets.androidplatform.net/assets/www/index.html"
     }
 }
