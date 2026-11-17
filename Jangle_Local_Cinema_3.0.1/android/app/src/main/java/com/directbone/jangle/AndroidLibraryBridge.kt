@@ -181,7 +181,12 @@ class AndroidLibraryBridge(private val activity: MainActivity) {
     /** Serves the selected video's content through an appassets URL with byte-range support. */
     fun openMediaResponse(request: WebResourceRequest): WebResourceResponse {
         return try {
-            val encoded = request.url.encodedPath.substringAfter("/jangle-media/")
+            // Uri.encodedPath is nullable on Android. Guard it before using String APIs.
+            val encodedPath = request.url.encodedPath ?: return errorResponse(400, "Bad Request")
+            val mediaPrefix = "/jangle-media/"
+            if (!encodedPath.startsWith(mediaPrefix)) return errorResponse(404, "Not Found")
+            val encoded = encodedPath.substringAfter(mediaPrefix)
+            if (encoded.isBlank()) return errorResponse(400, "Bad Request")
             val relativePath = String(Base64.decode(encoded, Base64.URL_SAFE), StandardCharsets.UTF_8)
             val file = findNode(relativePath) ?: return errorResponse(404, "Not Found")
             if (!file.isFile) return errorResponse(404, "Not Found")

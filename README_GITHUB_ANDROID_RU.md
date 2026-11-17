@@ -49,3 +49,8 @@ Android ограничивает выбор некоторых системны�
 ### Исправление ошибки `Failed to find package 'tools'`
 
 В workflow используется `android-actions/setup-android@v4.0.2` с явным `packages: 'platform-tools'`. Старый пакет SDK `tools` больше не публикуется Google, а `setup-android@v3` мог пытаться установить именно его. Лицензии SDK принимает само действие; отдельный вызов `yes | sdkmanager --licenses` больше не нужен. Остальные параметры сборки и исходники приложения не изменены.
+
+
+### Исправление компиляции Kotlin
+
+В `AndroidLibraryBridge.kt` добавлена проверка nullable `Uri.encodedPath` перед вызовом `substringAfter()`. Также проверяется наличие ожидаемого префикса `/jangle-media/` и непустой Base64-путь. Это устраняет ошибку Kotlin `Only safe (?.) or non-null asserted (!!.) calls are allowed on a nullable receiver of type String?`, возникавшую при `compileDebugKotlin`.
