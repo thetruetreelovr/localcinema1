@@ -23,12 +23,15 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4.0.2
+        with:
+          # The old SDK package "tools" is no longer published by Google.
+          # setup-android v4.0.2 defaults to platform-tools; keep it explicit.
+          packages: 'platform-tools'
+          accept-android-sdk-licenses: true
 
       - name: Install required Android SDK packages
-        run: |
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
