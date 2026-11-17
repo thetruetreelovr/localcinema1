@@ -30,8 +30,8 @@ jobs:
         mkdir -p android_build/app/src/main/res/values
         mkdir -p android_build/app/src/main/assets/www
 
-        # Копируем ваши веб-файлы из Jangle_Local_Cinema_3.0.2
-        cp -r Jangle_Local_Cinema_3.0.2/* android_build/app/src/main/assets/www/
+        # Копируем ваши веб-файлы из Jangle_Local_Cinema_3.0.1
+        cp -r Jangle_Local_Cinema_3.0.1/* android_build/app/src/main/assets/www/
 
         # 1. gradle.properties
         cat << 'EOF' > android_build/gradle.properties
@@ -82,7 +82,7 @@ jobs:
                 minSdk = 24
                 targetSdk = 34
                 versionCode = 1
-                versionName = "3.0.2"
+                versionName = "3.0.1"
             }
             compileOptions {
                 sourceCompatibility = JavaVersion.VERSION_17
@@ -447,5 +447,5 @@ jobs:
             - name: Сохранение готового APK
             uses: actions/upload-artifact@v4
             with:
-            name: Jangle_Local_Cinema_3.0.2_APK
+            name: Jangle_Local_Cinema_3.0.1_APK
             path: android_build/app/build/outputs/apk/debug/*.apk
